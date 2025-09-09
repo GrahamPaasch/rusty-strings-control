@@ -1,0 +1,10 @@
+# Ignore build artifacts
+/target/
+
+# VSCode / editor settings
+.vscode/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
