@@ -1,0 +1,32 @@
+# Example configuration for Rusty Strings Control
+
+# Note must be within ±this many cents to trigger
+tolerance_cents = 35.0
+
+# Frequency range searched by detector
+min_hz = 90.0
+max_hz = 2000.0
+
+# Processing window and hop (0 = auto). Larger window improves low-note accuracy.
+window_size = 0
+hop_size = 0
+
+# Require this many consecutive frames of the same in-tune note
+note_hold_frames = 3
+
+# Minimum milliseconds between repeated triggers of the same note
+retrigger_ms = 600
+
+# Correlation threshold (0..1). Higher = stricter detection confidence.
+corr_threshold = 0.35
+
+# Map note names (e.g., A4, E4) to actions.
+# Supported action types:
+#   - Keys: send a key sequence like "Ctrl+S", "Space", "Enter", "A".
+
+[note_map]
+A4 = { type = "keys", sequence = "Ctrl+S" } # Save
+E4 = { type = "keys", sequence = "Space" }  # Spacebar
+D4 = { type = "keys", sequence = "Ctrl+Z" } # Undo
+G3 = { type = "keys", sequence = "Ctrl+Y" } # Redo
+
