@@ -7,11 +7,13 @@ publish = false
 [dependencies]
 anyhow = "1"
 cpal = "0.15"
-enigo = "0.1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 thiserror = "1"
 crossbeam-channel = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+enigo = "0.1"
 
 [profile.release]
 opt-level = 3

@@ -4,10 +4,10 @@ use crossbeam_channel::{bounded, Receiver};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-// Keystroke injection
+// Keystroke injection (Windows only)
+#[cfg(windows)]
 use enigo::{Enigo, Key, KeyboardControllable};
 
 // ---------------------------- Config types ----------------------------
@@ -125,7 +125,10 @@ fn main() -> Result<()> {
     println!("Window: {} samples, Hop: {} samples", window_size, hop_size);
 
     // State for triggering
-    let mut enigo = Enigo::new();
+    #[cfg(windows)]
+    let mut sender = Enigo::new();
+    #[cfg(not(windows))]
+    let mut sender = ();
     let mut last_note: Option<String> = None;
     let mut stable_count: usize = 0;
     let mut last_trigger_time = Instant::now() - Duration::from_millis(cfg.retrigger_ms);
@@ -176,7 +179,7 @@ fn main() -> Result<()> {
                 {
                     if let Some(action) = cfg.note_map.get(&note_name) {
                         println!("\nTrigger: {note_name} => {:?}", action_name(action));
-                        if let Err(e) = execute_action(&mut enigo, action) {
+                        if let Err(e) = execute_action(&mut sender, action) {
                             eprintln!("Action failed: {e:#}");
                         } else {
                             last_trigger_time = now;
@@ -214,9 +217,9 @@ fn build_input_stream() -> Result<(Receiver<f32>, u32, u16, cpal::Stream)> {
     let (tx, rx) = bounded::<f32>(sample_rate as usize); // ~1 second buffer
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => build_stream::<f32>(&device, &config.into(), channels, tx.clone())?,
-        cpal::SampleFormat::I16 => build_stream::<i16>(&device, &config.into(), channels, tx.clone())?,
-        cpal::SampleFormat::U16 => build_stream::<u16>(&device, &config.into(), channels, tx.clone())?,
+        cpal::SampleFormat::F32 => build_stream_f32(&device, &config.into(), channels, tx.clone())?,
+        cpal::SampleFormat::I16 => build_stream_i16(&device, &config.into(), channels, tx.clone())?,
+        cpal::SampleFormat::U16 => build_stream_u16(&device, &config.into(), channels, tx.clone())?,
         // Cover any new formats conservatively
         other => return Err(anyhow!("Unsupported sample format: {:?}", other)),
     };
@@ -226,24 +229,67 @@ fn build_input_stream() -> Result<(Receiver<f32>, u32, u16, cpal::Stream)> {
     Ok((rx, sample_rate, channels, stream))
 }
 
-fn build_stream<T>(
+fn build_stream_f32(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     channels: u16,
     tx: crossbeam_channel::Sender<f32>,
-) -> Result<cpal::Stream>
-where
-    T: cpal::Sample,
-{
+) -> Result<cpal::Stream> {
     let err_fn = |err| eprintln!("Stream error: {err}");
     let stream = device.build_input_stream(
         config,
-        move |data: &[T], _| {
-            // Mixdown to mono and send
+        move |data: &[f32], _| {
+            for frame in data.chunks(channels as usize) {
+                let mut acc = 0.0f32;
+                for &s in frame { acc += s; }
+                let mono = acc / channels as f32;
+                let _ = tx.try_send(mono);
+            }
+        },
+        err_fn,
+        None,
+    )?;
+    Ok(stream)
+}
+
+fn build_stream_i16(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    channels: u16,
+    tx: crossbeam_channel::Sender<f32>,
+) -> Result<cpal::Stream> {
+    let err_fn = |err| eprintln!("Stream error: {err}");
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[i16], _| {
+            for frame in data.chunks(channels as usize) {
+                let mut acc = 0.0f32;
+                for &s in frame { acc += (s as f32) / (i16::MAX as f32); }
+                let mono = acc / channels as f32;
+                let _ = tx.try_send(mono);
+            }
+        },
+        err_fn,
+        None,
+    )?;
+    Ok(stream)
+}
+
+fn build_stream_u16(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    channels: u16,
+    tx: crossbeam_channel::Sender<f32>,
+) -> Result<cpal::Stream> {
+    let err_fn = |err| eprintln!("Stream error: {err}");
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[u16], _| {
             for frame in data.chunks(channels as usize) {
                 let mut acc = 0.0f32;
                 for &s in frame {
-                    acc += s.to_f32();
+                    let norm = (s as f32) / (u16::MAX as f32); // 0..1
+                    acc += norm * 2.0 - 1.0; // -1..1
                 }
                 let mono = acc / channels as f32;
                 let _ = tx.try_send(mono);
@@ -368,13 +414,7 @@ fn action_name(a: &Action) -> String {
     }
 }
 
-fn execute_action(enigo: &mut Enigo, action: &Action) -> Result<()> {
-    match action {
-        Action::Keys { sequence } => send_keys(enigo, sequence),
-        // Action::Command { .. } => todo!("Not implemented"),
-    }
-}
-
+#[cfg(windows)]
 fn send_keys(enigo: &mut Enigo, sequence: &str) -> Result<()> {
     // Parse tokens like "Ctrl+Shift+S" or "Enter" or "Space" or "A"
     let tokens: Vec<String> = sequence
@@ -438,4 +478,19 @@ fn load_config() -> Result<Config> {
     if cfg.hop_size == 0 { cfg.hop_size = def.hop_size; }
     if cfg.note_map.is_empty() { cfg.note_map = def.note_map; }
     Ok(cfg)
+}
+
+// ---------------------------- Non-Windows stubs ----------------------------
+
+#[cfg(not(windows))]
+fn execute_action(_dummy: &mut (), action: &Action) -> Result<()> {
+    println!("(stub) would execute: {}", action_name(action));
+    Ok(())
+}
+
+#[cfg(windows)]
+fn execute_action(enigo: &mut Enigo, action: &Action) -> Result<()> {
+    match action {
+        Action::Keys { sequence } => send_keys(enigo, sequence),
+    }
 }
